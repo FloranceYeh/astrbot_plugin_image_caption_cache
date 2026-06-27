@@ -20,19 +20,43 @@ class ImageCaptionCachePlugin(Star):
     def __init__(self, context: Context, config: Any = None):
         super().__init__(context)
         self.config = config
-        self.cache = ImageCaptionCache()
+        self.cache = ImageCaptionCache(
+            on_cache_hit=self._log_cache_hit,
+            fingerprint_remote_images=self._config_bool(
+                "fingerprint_remote_images",
+                True,
+            ),
+            remote_fingerprint_timeout=self._config_float(
+                "remote_fingerprint_timeout",
+                8.0,
+            ),
+            remote_fingerprint_max_bytes=self._config_int(
+                "remote_fingerprint_max_bytes",
+                20 * 1024 * 1024,
+            ),
+        )
         self._patcher = ImageCaptionCachePatcher(
             cache=self.cache,
             ttl_resolver=self._cache_ttl,
             logger=logger,
         )
         self._patched_targets: list[str] = []
+        self._apply_patches("init")
 
     @filter.on_astrbot_loaded()
     async def on_astrbot_loaded(self):
         """Apply image caption cache patches after AstrBot is ready."""
+        self._apply_patches("astrbot_loaded")
+
+    def _apply_patches(self, reason: str) -> None:
         if not self._config_bool("enabled", True):
             logger.info("image_caption_cache plugin is disabled.")
+            return
+        if self._patched_targets:
+            logger.debug(
+                "image_caption_cache plugin already patched. "
+                f"reason={reason}, patched={','.join(self._patched_targets)}"
+            )
             return
 
         self._patched_targets = self._patcher.apply(
@@ -42,9 +66,15 @@ class ImageCaptionCachePlugin(Star):
         )
         logger.info(
             "image_caption_cache plugin loaded. "
+            f"reason={reason}, "
             f"ttl={self._cache_ttl(None)}, "
             f"patched={','.join(self._patched_targets) or 'none'}"
         )
+        if not self._patched_targets:
+            logger.warning(
+                "image_caption_cache plugin did not patch any target. "
+                "Check AstrBot version and core function signatures."
+            )
 
     @filter.command("image_caption_cache_clear")
     async def clear_cache(self, event: AstrMessageEvent):
@@ -58,7 +88,8 @@ class ImageCaptionCachePlugin(Star):
         stats = self.cache.stats()
         ttl = self._cache_ttl(None)
         yield event.plain_result(
-            f"图片转述缓存：{stats.entries} 条，锁 {stats.locks} 个，TTL {ttl} 秒。"
+            f"图片转述缓存：{stats.entries} 条，锁 {stats.locks} 个，TTL {ttl} 秒；"
+            f"补丁：{','.join(self._patched_targets) or 'none'}。"
         )
 
     async def terminate(self):
@@ -85,6 +116,30 @@ class ImageCaptionCachePlugin(Star):
         if value is None:
             return default
         return str(value).strip().lower() in {"1", "true", "yes", "on", "enable"}
+
+    def _log_cache_hit(self, provider_id: str, image_count: int) -> None:
+        logger.info(
+            "图片转述缓存命中。"
+            f"provider={provider_id or '<default>'}, images={image_count}"
+        )
+
+    def _config_int(self, key: str, default: int) -> int:
+        value = self._config_value(key, default)
+        if isinstance(value, bool):
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _config_float(self, key: str, default: float) -> float:
+        value = self._config_value(key, default)
+        if isinstance(value, bool):
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
 
     def _config_value(self, key: str, default: object | None = None) -> object | None:
         if self.config is None:

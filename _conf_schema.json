@@ -28,5 +28,23 @@
     "type": "bool",
     "hint": "覆盖 AstrBot 群聊上下文插件中的图片转述调用。",
     "default": true
+  },
+  "fingerprint_remote_images": {
+    "description": "远程图片使用内容指纹",
+    "type": "bool",
+    "hint": "开启后会异步下载远程图片并用内容哈希作为缓存键，可解决平台临时 URL 每次变化导致的缓存 miss；失败时自动退回 URL 缓存键。",
+    "default": true
+  },
+  "remote_fingerprint_timeout": {
+    "description": "远程图片指纹超时（秒）",
+    "type": "float",
+    "hint": "远程图片内容指纹下载的最大等待时间。",
+    "default": 8
+  },
+  "remote_fingerprint_max_bytes": {
+    "description": "远程图片指纹最大下载字节数",
+    "type": "int",
+    "hint": "远程图片超过该大小时不下载内容，直接退回 URL 缓存键。",
+    "default": 20971520
   }
 }

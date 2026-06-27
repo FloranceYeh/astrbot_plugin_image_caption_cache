@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 DEFAULT_IMAGE_CAPTION_CACHE_TTL = 600
+CacheHitCallback = Callable[[str, int], None]
 
 
 def resolve_image_caption_cache_ttl(raw: object) -> int:
@@ -34,9 +35,20 @@ class _ImageCaptionCacheEntry:
 
 
 class ImageCaptionCache:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        on_cache_hit: CacheHitCallback | None = None,
+        *,
+        fingerprint_remote_images: bool = True,
+        remote_fingerprint_timeout: float = 8.0,
+        remote_fingerprint_max_bytes: int = 20 * 1024 * 1024,
+    ) -> None:
         self._entries: dict[str, _ImageCaptionCacheEntry] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._on_cache_hit = on_cache_hit
+        self._fingerprint_remote_images = fingerprint_remote_images
+        self._remote_fingerprint_timeout = max(float(remote_fingerprint_timeout), 1.0)
+        self._remote_fingerprint_max_bytes = max(int(remote_fingerprint_max_bytes), 1)
 
     def clear(self) -> int:
         removed = len(self._entries)
@@ -67,12 +79,14 @@ class ImageCaptionCache:
         )
         cached_caption = self._get(cache_key)
         if cached_caption is not None:
+            self._notify_cache_hit(provider_id, len(image_urls))
             return cached_caption
 
         lock = self._get_lock(cache_key)
         async with lock:
             cached_caption = self._get(cache_key)
             if cached_caption is not None:
+                self._notify_cache_hit(provider_id, len(image_urls))
                 return cached_caption
 
             caption = await caption_factory()
@@ -92,6 +106,14 @@ class ImageCaptionCache:
             self._locks.pop(cache_key, None)
             return None
         return entry.caption
+
+    def _notify_cache_hit(self, provider_id: str, image_count: int) -> None:
+        if self._on_cache_hit is None:
+            return
+        try:
+            self._on_cache_hit(provider_id, image_count)
+        except Exception:
+            pass
 
     def _cleanup_expired_entries(self) -> None:
         now = time.monotonic()
@@ -131,7 +153,7 @@ class ImageCaptionCache:
             return self._fingerprint_data_uri_image(image_url)
 
         if image_url.startswith(("http://", "https://")):
-            return f"url:{image_url}"
+            return await self._fingerprint_remote_image(image_url)
 
         return await self._fingerprint_local_image(image_url)
 
@@ -150,6 +172,43 @@ class ImageCaptionCache:
         except Exception:
             return self._reference_fingerprint(image_url)
         return self._hash_bytes(image_bytes)
+
+    async def _fingerprint_remote_image(self, image_url: str) -> str:
+        if not self._fingerprint_remote_images:
+            return f"url:{image_url}"
+
+        try:
+            import aiohttp
+        except ImportError:
+            return f"url:{image_url}"
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=self._remote_fingerprint_timeout)
+            async with aiohttp.ClientSession(
+                trust_env=True,
+                timeout=timeout,
+            ) as session:
+                async with session.get(image_url) as response:
+                    if response.status != 200:
+                        return f"url:{image_url}"
+
+                    content_length = response.headers.get("content-length")
+                    if (
+                        content_length
+                        and int(content_length) > self._remote_fingerprint_max_bytes
+                    ):
+                        return f"url:{image_url}"
+
+                    digest = hashlib.sha256()
+                    downloaded = 0
+                    async for chunk in response.content.iter_chunked(8192):
+                        downloaded += len(chunk)
+                        if downloaded > self._remote_fingerprint_max_bytes:
+                            return f"url:{image_url}"
+                        digest.update(chunk)
+                    return f"remote:{digest.hexdigest()}"
+        except Exception:
+            return f"url:{image_url}"
 
     async def _fingerprint_local_image(self, image_url: str) -> str:
         local_path = self._to_local_path(image_url)

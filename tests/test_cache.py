@@ -10,7 +10,12 @@ from cache import ImageCaptionCache
 
 class ImageCaptionCacheTests(unittest.IsolatedAsyncioTestCase):
     async def test_reuses_cached_caption_for_same_local_file(self):
-        cache = ImageCaptionCache()
+        cache_hits = []
+        cache = ImageCaptionCache(
+            on_cache_hit=lambda provider_id, image_count: cache_hits.append(
+                (provider_id, image_count)
+            )
+        )
         image_path = self._temp_path("same-image.png")
         image_path.write_bytes(b"same-image-bytes")
         calls = 0
@@ -38,6 +43,7 @@ class ImageCaptionCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caption1, "cached caption")
         self.assertEqual(caption2, "cached caption")
         self.assertEqual(calls, 1)
+        self.assertEqual(cache_hits, [("caption-provider", 1)])
 
     async def test_concurrent_waiters_share_caption_factory(self):
         cache = ImageCaptionCache()
@@ -108,7 +114,7 @@ class ImageCaptionCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, 2)
 
     async def test_fingerprints_supported_image_reference_types(self):
-        cache = ImageCaptionCache()
+        cache = ImageCaptionCache(fingerprint_remote_images=False)
         image_bytes = b"same-image-bytes"
         expected_hash = hashlib.sha256(image_bytes).hexdigest()
         image_path = self._temp_path("fingerprint-image.png")
