@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from astrbot.api import logger
@@ -16,6 +17,9 @@ except ImportError:
     from cache import DEFAULT_IMAGE_CAPTION_CACHE_TTL, ImageCaptionCache
     from cache import resolve_image_caption_cache_ttl as normalize_ttl
     from patcher import ImageCaptionCachePatcher
+
+
+_CACHE_HIT_LOG_DEDUP_SECONDS = 1.0
 
 
 class ImageCaptionCachePlugin(Star):
@@ -49,6 +53,7 @@ class ImageCaptionCachePlugin(Star):
             logger=logger,
         )
         self._patched_targets: list[str] = []
+        self._recent_cache_hit_logs: dict[str, float] = {}
         self._apply_patches("init")
 
     @filter.on_astrbot_loaded()
@@ -133,11 +138,29 @@ class ImageCaptionCachePlugin(Star):
             return default
         return str(value).strip().lower() in {"1", "true", "yes", "on", "enable"}
 
-    def _log_cache_hit(self, provider_id: str, image_count: int) -> None:
+    def _log_cache_hit(self, provider_id: str, image_count: int, cache_key: str) -> None:
+        now = time.monotonic()
+        last_logged_at = self._recent_cache_hit_logs.get(cache_key)
+        if (
+            last_logged_at is not None
+            and now - last_logged_at < _CACHE_HIT_LOG_DEDUP_SECONDS
+        ):
+            return
+        self._recent_cache_hit_logs[cache_key] = now
+        self._cleanup_recent_cache_hit_logs(now)
         logger.info(
             "图片转述缓存命中。"
             f"provider={provider_id or '<default>'}, images={image_count}"
         )
+
+    def _cleanup_recent_cache_hit_logs(self, now: float) -> None:
+        expired_keys = [
+            key
+            for key, logged_at in self._recent_cache_hit_logs.items()
+            if now - logged_at >= _CACHE_HIT_LOG_DEDUP_SECONDS
+        ]
+        for key in expired_keys:
+            self._recent_cache_hit_logs.pop(key, None)
 
     def _ttl_strategy_enabled(self) -> bool:
         return self._config_bool("enable_ttl_cache", True) and self._cache_ttl(None) > 0

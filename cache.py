@@ -11,7 +11,7 @@ from urllib.parse import unquote, urlparse
 
 DEFAULT_IMAGE_CAPTION_CACHE_TTL = 600
 DEFAULT_IMAGE_CAPTION_CACHE_MAX_IMAGES = 200
-CacheHitCallback = Callable[[str, int], None]
+CacheHitCallback = Callable[[str, int, str], None]
 
 
 def resolve_image_caption_cache_ttl(raw: object) -> int:
@@ -110,14 +110,14 @@ class ImageCaptionCache:
         )
         cached_caption = self._get(cache_key)
         if cached_caption is not None:
-            self._notify_cache_hit(provider_id, len(image_urls))
+            self._notify_cache_hit(provider_id, len(image_urls), cache_key)
             return cached_caption
 
         lock = self._get_lock(cache_key)
         async with lock:
             cached_caption = self._get(cache_key)
             if cached_caption is not None:
-                self._notify_cache_hit(provider_id, len(image_urls))
+                self._notify_cache_hit(provider_id, len(image_urls), cache_key)
                 return cached_caption
 
             caption = await caption_factory()
@@ -143,11 +143,16 @@ class ImageCaptionCache:
         entry.last_accessed_at = time.monotonic()
         return entry.caption
 
-    def _notify_cache_hit(self, provider_id: str, image_count: int) -> None:
+    def _notify_cache_hit(
+        self,
+        provider_id: str,
+        image_count: int,
+        cache_key: str,
+    ) -> None:
         if self._on_cache_hit is None:
             return
         try:
-            self._on_cache_hit(provider_id, image_count)
+            self._on_cache_hit(provider_id, image_count, cache_key)
         except Exception:
             pass
 
