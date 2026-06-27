@@ -69,7 +69,6 @@ class ImageCaptionCachePlugin(Star):
 
         self._patched_targets = self._patcher.apply(
             patch_main_agent=self._config_bool("patch_main_agent", True),
-            patch_group_chat_context=self._config_bool("patch_group_chat_context", True),
             patch_quoted_message=self._config_bool("patch_quoted_message", True),
         )
         logger.info(

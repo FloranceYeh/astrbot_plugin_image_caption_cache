@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib
 import inspect
 import os
-import uuid
 from collections.abc import Callable
 from types import ModuleType
 from typing import Any
@@ -34,7 +33,6 @@ class ImageCaptionCachePatcher:
         self,
         *,
         patch_main_agent: bool = True,
-        patch_group_chat_context: bool = True,
         patch_quoted_message: bool = True,
     ) -> list[str]:
         applied = []
@@ -42,8 +40,6 @@ class ImageCaptionCachePatcher:
             applied.append("main_agent")
         if patch_quoted_message and self._patch_quoted_message():
             applied.append("quoted_message")
-        if patch_group_chat_context and self._patch_group_chat_context():
-            applied.append("group_chat_context")
         return applied
 
     def restore(self) -> None:
@@ -284,79 +280,6 @@ class ImageCaptionCachePatcher:
                     self._logger.warning(
                         f"Fail to remove temporary compressed image: {exc}"
                     )
-
-    def _patch_group_chat_context(self) -> bool:
-        group_context_module = self._import_module(
-            "astrbot.builtin_stars.astrbot.group_chat_context"
-        )
-        if group_context_module is None:
-            return False
-        group_context_cls = getattr(group_context_module, "GroupChatContext", None)
-        if group_context_cls is None or not hasattr(group_context_cls, "get_image_caption"):
-            return False
-
-        original = getattr(group_context_cls, "get_image_caption")
-        if not self._signature_has_prefix(
-            original,
-            ["self", "image_url", "image_caption_provider_id", "image_caption_prompt"],
-        ):
-            self._logger.warning(
-                "Skip group chat image caption cache patch: unsupported get_image_caption signature."
-            )
-            return False
-
-        async def cached_get_image_caption(
-            instance: Any,
-            image_url: str,
-            image_caption_provider_id: str,
-            image_caption_prompt: str,
-            cache_ttl: int | None = None,
-        ) -> str:
-            if not image_caption_provider_id:
-                provider = instance.context.get_using_provider()
-            else:
-                provider = instance.context.get_provider_by_id(image_caption_provider_id)
-                if not provider:
-                    raise ValueError(
-                        f"Provider `{image_caption_provider_id}` was not found."
-                    )
-
-            provider_cls = getattr(group_context_module, "Provider", None)
-            if provider_cls is not None and not isinstance(provider, provider_cls):
-                raise ValueError(
-                    f"Provider type is invalid for image captioning: {type(provider)}."
-                )
-
-            cache_provider_id = self._resolve_provider_cache_identity(
-                provider,
-                configured_provider_id=image_caption_provider_id,
-            )
-            ttl = cache_ttl if cache_ttl is not None else self._ttl_resolver(None)
-
-            async def caption_factory() -> str:
-                response = await provider.text_chat(
-                    prompt=image_caption_prompt,
-                    session_id=uuid.uuid4().hex,
-                    image_urls=[image_url],
-                    persist=False,
-                )
-                return getattr(response, "completion_text", "") if response else ""
-
-            return await self._cache.get_or_create(
-                provider_id=cache_provider_id,
-                prompt=image_caption_prompt,
-                image_urls=[image_url],
-                ttl_seconds=ttl,
-                caption_factory=caption_factory,
-            )
-
-        self._replace(
-            group_context_cls,
-            "get_image_caption",
-            cached_get_image_caption,
-            "__image_caption_cache_original_get_image_caption",
-        )
-        return True
 
     def _replace(
         self,

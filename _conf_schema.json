@@ -41,12 +41,6 @@
     "hint": "覆盖 AstrBot 引用消息解析中的图片转述调用。",
     "default": true
   },
-  "patch_group_chat_context": {
-    "description": "缓存群聊上下文图片转述",
-    "type": "bool",
-    "hint": "覆盖 AstrBot 群聊上下文插件中的图片转述调用。",
-    "default": true
-  },
   "fingerprint_remote_images": {
     "description": "远程图片使用内容指纹",
     "type": "bool",

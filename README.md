@@ -6,7 +6,6 @@
 
 - 主对话图片转述缓存：同一 provider、同一提示词、同一图片在 TTL 内复用结果。
 - 引用消息图片转述缓存。
-- 群聊上下文图片转述缓存。
 - 支持 `base64://`、`data:image...`、本地文件、`file://` 和远程 URL 的图片指纹。
 - 插件卸载时自动恢复被补丁覆盖的 AstrBot 核心函数。
 
@@ -23,7 +22,6 @@
 - `max_cached_images`：最多缓存的图片数量，默认 `200`；多图转述会按实际图片张数占用容量。
 - `patch_main_agent`：缓存主对话图片转述，默认开启。
 - `patch_quoted_message`：缓存引用消息图片转述，默认开启。
-- `patch_group_chat_context`：缓存群聊上下文图片转述，默认开启。
 - `fingerprint_remote_images`：远程图片使用内容指纹，默认开启；用于处理平台每次生成不同临时 URL 的情况。
 - `remote_fingerprint_timeout`：远程图片内容指纹下载超时，默认 `8` 秒。
 - `remote_fingerprint_max_bytes`：远程图片内容指纹最大下载字节数，默认 `20971520`。
