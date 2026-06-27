@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 DEFAULT_IMAGE_CAPTION_CACHE_TTL = 600
+DEFAULT_IMAGE_CAPTION_CACHE_MAX_IMAGES = 200
 CacheHitCallback = Callable[[str, int], None]
 
 
@@ -25,13 +26,16 @@ def resolve_image_caption_cache_ttl(raw: object) -> int:
 @dataclass(slots=True)
 class CacheStats:
     entries: int
+    images: int
     locks: int
 
 
 @dataclass(slots=True)
 class _ImageCaptionCacheEntry:
     caption: str
-    expires_at: float
+    image_count: int
+    expires_at: float | None
+    last_accessed_at: float
 
 
 class ImageCaptionCache:
@@ -39,6 +43,9 @@ class ImageCaptionCache:
         self,
         on_cache_hit: CacheHitCallback | None = None,
         *,
+        ttl_enabled: bool = True,
+        image_count_enabled: bool = True,
+        max_cached_images: int = DEFAULT_IMAGE_CAPTION_CACHE_MAX_IMAGES,
         fingerprint_remote_images: bool = True,
         remote_fingerprint_timeout: float = 8.0,
         remote_fingerprint_max_bytes: int = 20 * 1024 * 1024,
@@ -46,6 +53,9 @@ class ImageCaptionCache:
         self._entries: dict[str, _ImageCaptionCacheEntry] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._on_cache_hit = on_cache_hit
+        self._ttl_enabled = ttl_enabled
+        self._image_count_enabled = image_count_enabled
+        self._max_cached_images = max(int(max_cached_images), 0)
         self._fingerprint_remote_images = fingerprint_remote_images
         self._remote_fingerprint_timeout = max(float(remote_fingerprint_timeout), 1.0)
         self._remote_fingerprint_max_bytes = max(int(remote_fingerprint_max_bytes), 1)
@@ -58,7 +68,11 @@ class ImageCaptionCache:
 
     def stats(self) -> CacheStats:
         self._cleanup_expired_entries()
-        return CacheStats(entries=len(self._entries), locks=len(self._locks))
+        return CacheStats(
+            entries=len(self._entries),
+            images=self._cached_image_count(),
+            locks=len(self._locks),
+        )
 
     async def get_or_create(
         self,
@@ -68,8 +82,25 @@ class ImageCaptionCache:
         image_urls: list[str],
         ttl_seconds: int,
         caption_factory: Callable[[], Awaitable[str]],
+        ttl_enabled: bool | None = None,
+        image_count_enabled: bool | None = None,
+        max_cached_images: int | None = None,
     ) -> str:
-        if ttl_seconds <= 0:
+        ttl_seconds = max(int(ttl_seconds), 0)
+        ttl_active = (self._ttl_enabled if ttl_enabled is None else ttl_enabled) and (
+            ttl_seconds > 0
+        )
+        count_limit = (
+            self._max_cached_images
+            if max_cached_images is None
+            else max(int(max_cached_images), 0)
+        )
+        image_count_active = (
+            self._image_count_enabled
+            if image_count_enabled is None
+            else image_count_enabled
+        ) and count_limit > 0
+        if not ttl_active and not image_count_active:
             return await caption_factory()
 
         cache_key = await self._build_cache_key(
@@ -92,19 +123,24 @@ class ImageCaptionCache:
             caption = await caption_factory()
             self._entries[cache_key] = _ImageCaptionCacheEntry(
                 caption=caption,
-                expires_at=time.monotonic() + ttl_seconds,
+                image_count=max(len(image_urls), 1),
+                expires_at=time.monotonic() + ttl_seconds if ttl_active else None,
+                last_accessed_at=time.monotonic(),
             )
             self._cleanup_expired_entries()
+            if image_count_active:
+                self._evict_by_image_count_limit(count_limit)
             return caption
 
     def _get(self, cache_key: str) -> str | None:
         entry = self._entries.get(cache_key)
         if entry is None:
             return None
-        if entry.expires_at <= time.monotonic():
+        if entry.expires_at is not None and entry.expires_at <= time.monotonic():
             self._entries.pop(cache_key, None)
             self._locks.pop(cache_key, None)
             return None
+        entry.last_accessed_at = time.monotonic()
         return entry.caption
 
     def _notify_cache_hit(self, provider_id: str, image_count: int) -> None:
@@ -118,11 +154,25 @@ class ImageCaptionCache:
     def _cleanup_expired_entries(self) -> None:
         now = time.monotonic()
         expired_keys = [
-            key for key, entry in self._entries.items() if entry.expires_at <= now
+            key
+            for key, entry in self._entries.items()
+            if entry.expires_at is not None and entry.expires_at <= now
         ]
         for key in expired_keys:
             self._entries.pop(key, None)
             self._locks.pop(key, None)
+
+    def _evict_by_image_count_limit(self, max_cached_images: int) -> None:
+        while self._cached_image_count() > max_cached_images and self._entries:
+            oldest_key = min(
+                self._entries,
+                key=lambda key: self._entries[key].last_accessed_at,
+            )
+            self._entries.pop(oldest_key, None)
+            self._locks.pop(oldest_key, None)
+
+    def _cached_image_count(self) -> int:
+        return sum(entry.image_count for entry in self._entries.values())
 
     def _get_lock(self, cache_key: str) -> asyncio.Lock:
         lock = self._locks.get(cache_key)

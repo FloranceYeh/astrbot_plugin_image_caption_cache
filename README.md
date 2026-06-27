@@ -17,7 +17,10 @@
 在 AstrBot WebUI 的插件配置中设置：
 
 - `enabled`：是否启用补丁，默认开启。
-- `image_caption_cache_ttl`：缓存有效期，单位秒，默认 `600`；设为 `0` 表示禁用缓存。
+- `enable_ttl_cache`：启用 TTL 缓存策略，默认开启。
+- `image_caption_cache_ttl`：缓存有效期，单位秒，默认 `600`；设为 `0` 等同关闭 TTL 策略。
+- `enable_image_count_cache`：启用图片数量缓存策略，默认开启。
+- `max_cached_images`：最多缓存的图片数量，默认 `200`；多图转述会按实际图片张数占用容量。
 - `patch_main_agent`：缓存主对话图片转述，默认开启。
 - `patch_quoted_message`：缓存引用消息图片转述，默认开启。
 - `patch_group_chat_context`：缓存群聊上下文图片转述，默认开启。
@@ -29,7 +32,7 @@
 
 ## 命令
 
-- `/image_caption_cache_stats`：查看当前缓存条目数、锁数量和 TTL。
+- `/image_caption_cache_stats`：查看当前缓存条目数、缓存图片数量、锁数量、策略开关和补丁目标。
 - `/image_caption_cache_clear`：清空缓存。
 
 ## 说明

@@ -7,10 +7,12 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 
 try:
+    from .cache import DEFAULT_IMAGE_CAPTION_CACHE_MAX_IMAGES
     from .cache import DEFAULT_IMAGE_CAPTION_CACHE_TTL, ImageCaptionCache
     from .cache import resolve_image_caption_cache_ttl as normalize_ttl
     from .patcher import ImageCaptionCachePatcher
 except ImportError:
+    from cache import DEFAULT_IMAGE_CAPTION_CACHE_MAX_IMAGES
     from cache import DEFAULT_IMAGE_CAPTION_CACHE_TTL, ImageCaptionCache
     from cache import resolve_image_caption_cache_ttl as normalize_ttl
     from patcher import ImageCaptionCachePatcher
@@ -22,6 +24,12 @@ class ImageCaptionCachePlugin(Star):
         self.config = config
         self.cache = ImageCaptionCache(
             on_cache_hit=self._log_cache_hit,
+            ttl_enabled=self._ttl_strategy_enabled(),
+            image_count_enabled=self._image_count_strategy_enabled(),
+            max_cached_images=self._config_int(
+                "max_cached_images",
+                DEFAULT_IMAGE_CAPTION_CACHE_MAX_IMAGES,
+            ),
             fingerprint_remote_images=self._config_bool(
                 "fingerprint_remote_images",
                 True,
@@ -67,7 +75,10 @@ class ImageCaptionCachePlugin(Star):
         logger.info(
             "image_caption_cache plugin loaded. "
             f"reason={reason}, "
+            f"ttl_enabled={self._ttl_strategy_enabled()}, "
             f"ttl={self._cache_ttl(None)}, "
+            f"image_count_enabled={self._image_count_strategy_enabled()}, "
+            f"max_cached_images={self._max_cached_images()}, "
             f"patched={','.join(self._patched_targets) or 'none'}"
         )
         if not self._patched_targets:
@@ -88,7 +99,13 @@ class ImageCaptionCachePlugin(Star):
         stats = self.cache.stats()
         ttl = self._cache_ttl(None)
         yield event.plain_result(
-            f"图片转述缓存：{stats.entries} 条，锁 {stats.locks} 个，TTL {ttl} 秒；"
+            f"图片转述缓存：{stats.entries} 条，{stats.images} 张图，"
+            f"锁 {stats.locks} 个；"
+            f"TTL 策略：{self._enabled_text(self._ttl_strategy_enabled())}"
+            f"（{ttl} 秒）；"
+            "图片数量策略："
+            f"{self._enabled_text(self._image_count_strategy_enabled())}"
+            f"（上限 {self._max_cached_images()} 张）；"
             f"补丁：{','.join(self._patched_targets) or 'none'}。"
         )
 
@@ -122,6 +139,24 @@ class ImageCaptionCachePlugin(Star):
             "图片转述缓存命中。"
             f"provider={provider_id or '<default>'}, images={image_count}"
         )
+
+    def _ttl_strategy_enabled(self) -> bool:
+        return self._config_bool("enable_ttl_cache", True) and self._cache_ttl(None) > 0
+
+    def _image_count_strategy_enabled(self) -> bool:
+        return (
+            self._config_bool("enable_image_count_cache", True)
+            and self._max_cached_images() > 0
+        )
+
+    def _max_cached_images(self) -> int:
+        return self._config_int(
+            "max_cached_images",
+            DEFAULT_IMAGE_CAPTION_CACHE_MAX_IMAGES,
+        )
+
+    def _enabled_text(self, enabled: bool) -> str:
+        return "开启" if enabled else "关闭"
 
     def _config_int(self, key: str, default: int) -> int:
         value = self._config_value(key, default)

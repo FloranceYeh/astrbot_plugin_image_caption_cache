@@ -85,8 +85,8 @@ class ImageCaptionCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await task2, "cached caption")
         self.assertEqual(calls, 1)
 
-    async def test_ttl_zero_disables_cache(self):
-        cache = ImageCaptionCache()
+    async def test_disables_cache_when_all_strategies_are_disabled(self):
+        cache = ImageCaptionCache(image_count_enabled=False)
         calls = 0
 
         async def caption_factory():
@@ -112,6 +112,81 @@ class ImageCaptionCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caption1, "caption 1")
         self.assertEqual(caption2, "caption 2")
         self.assertEqual(calls, 2)
+
+    async def test_image_count_cache_reuses_when_ttl_disabled(self):
+        cache = ImageCaptionCache(
+            ttl_enabled=False,
+            image_count_enabled=True,
+            max_cached_images=10,
+        )
+        calls = 0
+
+        async def caption_factory():
+            nonlocal calls
+            calls += 1
+            return "cached by image count"
+
+        caption1 = await cache.get_or_create(
+            provider_id="caption-provider",
+            prompt="describe",
+            image_urls=["same-image.png"],
+            ttl_seconds=0,
+            caption_factory=caption_factory,
+        )
+        caption2 = await cache.get_or_create(
+            provider_id="caption-provider",
+            prompt="describe",
+            image_urls=["same-image.png"],
+            ttl_seconds=0,
+            caption_factory=caption_factory,
+        )
+
+        self.assertEqual(caption1, "cached by image count")
+        self.assertEqual(caption2, "cached by image count")
+        self.assertEqual(calls, 1)
+        self.assertEqual(cache.stats().images, 1)
+
+    async def test_image_count_cache_evicts_least_recently_used_entries(self):
+        cache = ImageCaptionCache(
+            ttl_enabled=False,
+            image_count_enabled=True,
+            max_cached_images=1,
+        )
+        calls = 0
+
+        async def caption_factory():
+            nonlocal calls
+            calls += 1
+            return f"caption {calls}"
+
+        first_caption = await cache.get_or_create(
+            provider_id="caption-provider",
+            prompt="describe",
+            image_urls=["image-one.png"],
+            ttl_seconds=0,
+            caption_factory=caption_factory,
+        )
+        second_caption = await cache.get_or_create(
+            provider_id="caption-provider",
+            prompt="describe",
+            image_urls=["image-two.png"],
+            ttl_seconds=0,
+            caption_factory=caption_factory,
+        )
+        first_caption_after_eviction = await cache.get_or_create(
+            provider_id="caption-provider",
+            prompt="describe",
+            image_urls=["image-one.png"],
+            ttl_seconds=0,
+            caption_factory=caption_factory,
+        )
+
+        self.assertEqual(first_caption, "caption 1")
+        self.assertEqual(second_caption, "caption 2")
+        self.assertEqual(first_caption_after_eviction, "caption 3")
+        self.assertEqual(calls, 3)
+        self.assertEqual(cache.stats().entries, 1)
+        self.assertEqual(cache.stats().images, 1)
 
     async def test_fingerprints_supported_image_reference_types(self):
         cache = ImageCaptionCache(fingerprint_remote_images=False)

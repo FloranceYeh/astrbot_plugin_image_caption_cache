@@ -5,11 +5,29 @@
     "hint": "关闭后不再给 AstrBot 图片转述流程打缓存补丁；修改后需要重载插件。",
     "default": true
   },
+  "enable_ttl_cache": {
+    "description": "启用 TTL 缓存策略",
+    "type": "bool",
+    "hint": "开启后，缓存条目会在指定秒数后过期。可与图片数量策略同时开启。",
+    "default": true
+  },
   "image_caption_cache_ttl": {
     "description": "图片转述缓存时长（秒）",
     "type": "int",
-    "hint": "在缓存时间内再次收到相同图片时，直接复用已缓存的视觉识别结果；设为 0 表示禁用缓存。",
+    "hint": "仅在 TTL 缓存策略开启时生效；设为 0 等同于关闭 TTL 策略，但不影响图片数量策略。",
     "default": 600
+  },
+  "enable_image_count_cache": {
+    "description": "启用图片数量缓存策略",
+    "type": "bool",
+    "hint": "开启后，缓存最多保留指定数量的图片转述结果，超过上限会淘汰最久未使用的缓存。可与 TTL 策略同时开启。",
+    "default": true
+  },
+  "max_cached_images": {
+    "description": "最大缓存图片数量",
+    "type": "int",
+    "hint": "图片数量缓存策略的容量上限。多图转述会按实际图片张数占用容量。",
+    "default": 200
   },
   "patch_main_agent": {
     "description": "缓存主对话图片转述",
