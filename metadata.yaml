@@ -1,0 +1,18 @@
+name: astrbot_plugin_image_caption_cache
+display_name: Image Caption Cache
+author: FloranceYeh
+version: 0.1.0
+desc: 为 AstrBot 图片转述结果提供 TTL 内存缓存，减少重复图片的视觉模型调用
+repo: https://github.com/FloranceYeh/astrbot_plugin_image_caption_cache
+astrbot_version: ">=4.16,<5"
+support_platforms:
+  - aiocqhttp
+  - telegram
+  - qq_official
+  - wecom
+  - lark
+  - dingtalk
+  - discord
+  - slack
+  - kook
+  - satori

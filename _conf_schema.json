@@ -1,0 +1,32 @@
+{
+  "enabled": {
+    "description": "启用插件",
+    "type": "bool",
+    "hint": "关闭后不再给 AstrBot 图片转述流程打缓存补丁；修改后需要重载插件。",
+    "default": true
+  },
+  "image_caption_cache_ttl": {
+    "description": "图片转述缓存时长（秒）",
+    "type": "int",
+    "hint": "在缓存时间内再次收到相同图片时，直接复用已缓存的视觉识别结果；设为 0 表示禁用缓存。",
+    "default": 600
+  },
+  "patch_main_agent": {
+    "description": "缓存主对话图片转述",
+    "type": "bool",
+    "hint": "覆盖 AstrBot 主对话流程中的图片转述调用。",
+    "default": true
+  },
+  "patch_quoted_message": {
+    "description": "缓存引用消息图片转述",
+    "type": "bool",
+    "hint": "覆盖 AstrBot 引用消息解析中的图片转述调用。",
+    "default": true
+  },
+  "patch_group_chat_context": {
+    "description": "缓存群聊上下文图片转述",
+    "type": "bool",
+    "hint": "覆盖 AstrBot 群聊上下文插件中的图片转述调用。",
+    "default": true
+  }
+}
