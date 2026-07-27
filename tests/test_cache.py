@@ -6,6 +6,24 @@ import unittest
 from pathlib import Path
 
 from cache import ImageCaptionCache
+from patcher import ImageCaptionCachePatcher
+
+
+class _FakeProvider:
+    def __init__(self, provider_id, model, provider_type="openai_chat_completion"):
+        self.provider_config = {"id": provider_id, "type": provider_type}
+        self.model = model
+
+    def get_model(self):
+        return self.model
+
+
+class _FakeLogger:
+    def __init__(self):
+        self.warnings = []
+
+    def warning(self, message):
+        self.warnings.append(message)
 
 
 class ImageCaptionCacheTests(unittest.IsolatedAsyncioTestCase):
@@ -253,6 +271,66 @@ class ImageCaptionCacheTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self._tmp.cleanup()
+
+
+class ProviderCacheIdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.logger = _FakeLogger()
+        self.patcher = ImageCaptionCachePatcher(
+            cache=ImageCaptionCache(),
+            ttl_resolver=lambda _: 600,
+            logger=self.logger,
+        )
+
+    def test_identity_uses_resolved_provider_instead_of_configured_provider(self):
+        provider = _FakeProvider("fallback-provider", "vision-model")
+
+        identity = self.patcher._resolve_provider_cache_identity(
+            provider,
+            configured_provider_id="configured-provider",
+        )
+
+        self.assertEqual(identity, "fallback-provider:vision-model")
+
+    def test_identity_changes_when_actual_model_changes(self):
+        provider = _FakeProvider("caption-provider", "vision-model-a")
+        identity_a = self.patcher._resolve_provider_cache_identity(
+            provider,
+            configured_provider_id="caption-provider",
+        )
+
+        provider.model = "vision-model-b"
+        identity_b = self.patcher._resolve_provider_cache_identity(
+            provider,
+            configured_provider_id="caption-provider",
+        )
+
+        self.assertNotEqual(identity_a, identity_b)
+
+    def test_identity_falls_back_to_configured_id_when_provider_has_no_id(self):
+        provider = _FakeProvider("", "vision-model")
+
+        identity = self.patcher._resolve_provider_cache_identity(
+            provider,
+            configured_provider_id="configured-provider",
+        )
+
+        self.assertEqual(identity, "configured-provider:vision-model")
+
+    def test_identity_falls_back_to_provider_when_model_lookup_fails(self):
+        provider = _FakeProvider("actual-provider", "vision-model")
+
+        def fail_model_lookup():
+            raise RuntimeError("model unavailable")
+
+        provider.get_model = fail_model_lookup
+        identity = self.patcher._resolve_provider_cache_identity(
+            provider,
+            configured_provider_id="configured-provider",
+        )
+
+        self.assertEqual(identity, "actual-provider:")
+        self.assertEqual(len(self.logger.warnings), 1)
 
 
 if __name__ == "__main__":

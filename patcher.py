@@ -315,24 +315,37 @@ class ImageCaptionCachePatcher:
         *,
         configured_provider_id: str,
     ) -> str:
-        if configured_provider_id:
-            return configured_provider_id
-
         provider_config = (
-            provider.provider_config if isinstance(provider.provider_config, dict) else {}
+            provider.provider_config
+            if isinstance(getattr(provider, "provider_config", None), dict)
+            else {}
         )
-        provider_id = provider_config.get("id", "")
-        if isinstance(provider_id, str) and provider_id:
-            return provider_id
-
+        provider_id = provider_config.get("id") or configured_provider_id
         provider_type = provider_config.get("type", "")
         get_model = getattr(provider, "get_model", None)
-        model = get_model() if callable(get_model) else ""
+        try:
+            model = get_model() if callable(get_model) else ""
+        except Exception as exc:
+            model = ""
+            self._logger.warning(
+                "Cannot resolve the active image caption model; "
+                f"falling back to provider identity: {exc}"
+            )
+
+        # The configured ID identifies the requested provider, while get_model()
+        # identifies the model that the resolved provider will actually call.
+        if provider_id or model:
+            return ":".join(
+                [
+                    "" if provider_id is None else str(provider_id),
+                    "" if model is None else str(model),
+                ]
+            )
+
         return ":".join(
             [
                 provider.__class__.__module__,
                 provider.__class__.__qualname__,
                 "" if provider_type is None else str(provider_type),
-                "" if model is None else str(model),
             ]
         )
