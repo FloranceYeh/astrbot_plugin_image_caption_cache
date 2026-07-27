@@ -35,6 +35,12 @@
     "hint": "覆盖 AstrBot 主对话流程中的图片转述调用。",
     "default": true
   },
+  "force_caption_for_vision_models": {
+    "description": "原生视觉模型也强制转述",
+    "type": "bool",
+    "hint": "主模型支持图片时仍先调用专用图片转述模型并缓存描述，再让主模型基于文字描述回答；修改后需要重载插件。",
+    "default": true
+  },
   "patch_quoted_message": {
     "description": "缓存引用消息图片转述",
     "type": "bool",

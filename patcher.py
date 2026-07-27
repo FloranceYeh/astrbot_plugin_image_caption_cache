@@ -34,10 +34,16 @@ class ImageCaptionCachePatcher:
         *,
         patch_main_agent: bool = True,
         patch_quoted_message: bool = True,
+        force_caption_for_vision_models: bool = True,
     ) -> list[str]:
         applied = []
         if patch_main_agent and self._patch_main_agent_request():
             applied.append("main_agent")
+            if (
+                force_caption_for_vision_models
+                and self._patch_native_vision_caption()
+            ):
+                applied.append("native_vision")
         if patch_quoted_message and self._patch_quoted_message():
             applied.append("quoted_message")
         return applied
@@ -94,11 +100,12 @@ class ImageCaptionCachePatcher:
             ttl = self._ttl_resolver(cfg)
 
             async def caption_factory() -> str:
-                response = await provider.text_chat(
+                return await self._call_visual_model(
+                    provider,
+                    provider_identity=cache_provider_id,
                     prompt=caption_prompt,
                     image_urls=image_urls,
                 )
-                return getattr(response, "completion_text", "") if response else ""
 
             return await self._cache.get_or_create(
                 provider_id=cache_provider_id,
@@ -113,6 +120,71 @@ class ImageCaptionCachePatcher:
             "_request_img_caption",
             cached_request_img_caption,
             "__image_caption_cache_original_request_img_caption",
+        )
+        return True
+
+    def _patch_native_vision_caption(self) -> bool:
+        ama = self._import_module("astrbot.core.astr_main_agent")
+        if ama is None or not hasattr(ama, "_decorate_llm_request"):
+            return False
+
+        original = getattr(ama, "_decorate_llm_request")
+        if not self._signature_has_prefix(
+            original,
+            ["event", "req", "plugin_context", "config", "provider"],
+        ):
+            self._logger.warning(
+                "Skip native vision caption cache patch: unsupported "
+                "_decorate_llm_request signature."
+            )
+            return False
+
+        async def cached_decorate_llm_request(
+            event: Any,
+            req: Any,
+            plugin_context: Any,
+            config: Any,
+            provider: Any = None,
+        ) -> None:
+            provider_settings = getattr(config, "provider_settings", None)
+            if not provider_settings:
+                provider_settings = plugin_context.get_config(
+                    umo=event.unified_msg_origin
+                ).get("provider_settings", {})
+
+            image_caption_provider_id = (
+                provider_settings.get("default_image_caption_provider_id") or ""
+            )
+            provider_supports_image = (
+                provider is not None
+                and hasattr(ama, "_provider_supports_modality")
+                and ama._provider_supports_modality(provider, "image")
+            )
+            if (
+                req.conversation
+                and req.image_urls
+                and image_caption_provider_id
+                and provider_supports_image
+            ):
+                self._logger.debug(
+                    "Main provider supports image input; forcing cached image "
+                    "captioning with the configured caption provider."
+                )
+                await ama._ensure_img_caption(
+                    event,
+                    req,
+                    provider_settings,
+                    plugin_context,
+                    image_caption_provider_id,
+                )
+
+            await original(event, req, plugin_context, config, provider)
+
+        self._replace(
+            ama,
+            "_decorate_llm_request",
+            cached_decorate_llm_request,
+            "__image_caption_cache_original_decorate_llm_request",
         )
         return True
 
@@ -255,11 +327,12 @@ class ImageCaptionCachePatcher:
             ttl = self._ttl_resolver(provider_settings)
 
             async def caption_factory() -> str:
-                response = await provider.text_chat(
+                return await self._call_visual_model(
+                    provider,
+                    provider_identity=cache_provider_id,
                     prompt=caption_prompt,
                     image_urls=[compress_path],
                 )
-                return getattr(response, "completion_text", "") if response else ""
 
             caption = await self._cache.get_or_create(
                 provider_id=cache_provider_id,
@@ -271,7 +344,7 @@ class ImageCaptionCachePatcher:
             if caption:
                 content_parts.append(f"[Image Caption in quoted message]: {caption}")
         except Exception as exc:
-            self._logger.error(f"处理引用图片失败: {exc}")
+            self._logger.error(f"Failed to process quoted image: {exc}")
         finally:
             if compress_path and compress_path != path and os.path.exists(compress_path):
                 try:
@@ -280,6 +353,25 @@ class ImageCaptionCachePatcher:
                     self._logger.warning(
                         f"Fail to remove temporary compressed image: {exc}"
                     )
+
+    async def _call_visual_model(
+        self,
+        provider: Any,
+        *,
+        provider_identity: str,
+        prompt: str,
+        image_urls: list[str],
+    ) -> str:
+        self._logger.info(
+            "Image caption visual model call. "
+            f"provider={provider_identity or '<default>'}, "
+            f"images={len(image_urls)}"
+        )
+        response = await provider.text_chat(
+            prompt=prompt,
+            image_urls=image_urls,
+        )
+        return getattr(response, "completion_text", "") if response else ""
 
     def _replace(
         self,
@@ -321,27 +413,10 @@ class ImageCaptionCachePatcher:
             else {}
         )
         provider_id = provider_config.get("id") or configured_provider_id
+        if provider_id:
+            return str(provider_id)
+
         provider_type = provider_config.get("type", "")
-        get_model = getattr(provider, "get_model", None)
-        try:
-            model = get_model() if callable(get_model) else ""
-        except Exception as exc:
-            model = ""
-            self._logger.warning(
-                "Cannot resolve the active image caption model; "
-                f"falling back to provider identity: {exc}"
-            )
-
-        # The configured ID identifies the requested provider, while get_model()
-        # identifies the model that the resolved provider will actually call.
-        if provider_id or model:
-            return ":".join(
-                [
-                    "" if provider_id is None else str(provider_id),
-                    "" if model is None else str(model),
-                ]
-            )
-
         return ":".join(
             [
                 provider.__class__.__module__,

@@ -4,6 +4,7 @@ import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 from cache import ImageCaptionCache
 from patcher import ImageCaptionCachePatcher
@@ -13,14 +14,27 @@ class _FakeProvider:
     def __init__(self, provider_id, model, provider_type="openai_chat_completion"):
         self.provider_config = {"id": provider_id, "type": provider_type}
         self.model = model
+        self.calls = []
 
     def get_model(self):
         return self.model
 
+    async def text_chat(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(completion_text="generated caption")
+
 
 class _FakeLogger:
     def __init__(self):
+        self.debugs = []
+        self.infos = []
         self.warnings = []
+
+    def debug(self, message):
+        self.debugs.append(message)
+
+    def info(self, message):
+        self.infos.append(message)
 
     def warning(self, message):
         self.warnings.append(message)
@@ -290,9 +304,9 @@ class ProviderCacheIdentityTests(unittest.TestCase):
             configured_provider_id="configured-provider",
         )
 
-        self.assertEqual(identity, "fallback-provider:vision-model")
+        self.assertEqual(identity, "fallback-provider")
 
-    def test_identity_changes_when_actual_model_changes(self):
+    def test_identity_does_not_duplicate_the_model_name(self):
         provider = _FakeProvider("caption-provider", "vision-model-a")
         identity_a = self.patcher._resolve_provider_cache_identity(
             provider,
@@ -305,7 +319,8 @@ class ProviderCacheIdentityTests(unittest.TestCase):
             configured_provider_id="caption-provider",
         )
 
-        self.assertNotEqual(identity_a, identity_b)
+        self.assertEqual(identity_a, "caption-provider")
+        self.assertEqual(identity_b, "caption-provider")
 
     def test_identity_falls_back_to_configured_id_when_provider_has_no_id(self):
         provider = _FakeProvider("", "vision-model")
@@ -315,22 +330,130 @@ class ProviderCacheIdentityTests(unittest.TestCase):
             configured_provider_id="configured-provider",
         )
 
-        self.assertEqual(identity, "configured-provider:vision-model")
+        self.assertEqual(identity, "configured-provider")
 
-    def test_identity_falls_back_to_provider_when_model_lookup_fails(self):
-        provider = _FakeProvider("actual-provider", "vision-model")
 
-        def fail_model_lookup():
-            raise RuntimeError("model unavailable")
+class VisualModelLoggingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_logs_every_visual_model_call_with_actual_identity(self):
+        logger = _FakeLogger()
+        patcher = ImageCaptionCachePatcher(
+            cache=ImageCaptionCache(),
+            ttl_resolver=lambda _: 600,
+            logger=logger,
+        )
+        provider = _FakeProvider("fallback-provider", "vision-model")
 
-        provider.get_model = fail_model_lookup
-        identity = self.patcher._resolve_provider_cache_identity(
+        caption = await patcher._call_visual_model(
             provider,
-            configured_provider_id="configured-provider",
+            provider_identity="fallback-provider",
+            prompt="describe",
+            image_urls=["image-one.png", "image-two.png"],
         )
 
-        self.assertEqual(identity, "actual-provider:")
-        self.assertEqual(len(self.logger.warnings), 1)
+        self.assertEqual(caption, "generated caption")
+        self.assertEqual(len(provider.calls), 1)
+        self.assertEqual(
+            logger.infos,
+            [
+                "Image caption visual model call. "
+                "provider=fallback-provider, images=2"
+            ],
+        )
+
+
+class NativeVisionCaptionCacheTests(unittest.IsolatedAsyncioTestCase):
+    async def test_native_vision_requests_are_captioned_and_cached(self):
+        cache_hits = []
+        cache = ImageCaptionCache(
+            on_cache_hit=lambda provider_id, image_count, cache_key: cache_hits.append(
+                (provider_id, image_count, cache_key)
+            )
+        )
+        logger = _FakeLogger()
+        patcher = ImageCaptionCachePatcher(
+            cache=cache,
+            ttl_resolver=lambda _: 600,
+            logger=logger,
+        )
+        provider = _FakeProvider("caption-provider", "vision-model")
+        context = SimpleNamespace(
+            get_provider_by_id=lambda provider_id: (
+                provider if provider_id == "caption-provider" else None
+            ),
+            get_config=lambda **_: {"provider_settings": {}},
+        )
+        event = SimpleNamespace(unified_msg_origin="webchat:friend:test")
+        provider_settings = {
+            "default_image_caption_provider_id": "caption-provider",
+            "image_caption_prompt": "describe",
+        }
+        config = SimpleNamespace(provider_settings=provider_settings)
+        original_requests = []
+        ama = ModuleType("astrbot.core.astr_main_agent")
+        ama.Provider = _FakeProvider
+        ama._provider_supports_modality = lambda _provider, modality: (
+            modality == "image"
+        )
+
+        async def original_request_img_caption(
+            provider_id,
+            cfg,
+            image_urls,
+            plugin_context,
+        ):
+            raise AssertionError("the original image caption request must be patched")
+
+        async def ensure_img_caption(
+            _event,
+            req,
+            cfg,
+            plugin_context,
+            image_caption_provider,
+        ):
+            caption = await ama._request_img_caption(
+                image_caption_provider,
+                cfg,
+                req.image_urls,
+                plugin_context,
+            )
+            req.extra_user_content_parts.append(caption)
+            req.image_urls = []
+
+        async def original_decorate_llm_request(
+            event,
+            req,
+            plugin_context,
+            config,
+            provider=None,
+        ):
+            del event, plugin_context, config
+            original_requests.append(
+                (list(req.image_urls), list(req.extra_user_content_parts), provider)
+            )
+
+        ama._request_img_caption = original_request_img_caption
+        ama._ensure_img_caption = ensure_img_caption
+        ama._decorate_llm_request = original_decorate_llm_request
+        patcher._import_module = lambda _module_name: ama
+
+        applied = patcher.apply(patch_quoted_message=False)
+        self.assertEqual(applied, ["main_agent", "native_vision"])
+
+        for _ in range(2):
+            req = SimpleNamespace(
+                conversation=object(),
+                image_urls=["same-image.png"],
+                extra_user_content_parts=[],
+            )
+            await ama._decorate_llm_request(event, req, context, config, provider)
+
+        self.assertEqual(len(provider.calls), 1)
+        self.assertEqual(len(cache_hits), 1)
+        self.assertEqual(cache.stats().entries, 1)
+        self.assertEqual(
+            [(images, captions) for images, captions, _ in original_requests],
+            [([], ["generated caption"]), ([], ["generated caption"])],
+        )
 
 
 if __name__ == "__main__":

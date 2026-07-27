@@ -21,6 +21,7 @@
 - `enable_image_count_cache`：启用图片数量缓存策略，默认开启。
 - `max_cached_images`：最多缓存的图片数量，默认 `200`；多图转述会按实际图片张数占用容量。
 - `patch_main_agent`：缓存主对话图片转述，默认开启。
+- `force_caption_for_vision_models`：主模型原生支持图片时也强制先走专用图片转述与缓存，默认开启。
 - `patch_quoted_message`：缓存引用消息图片转述，默认开启。
 - `fingerprint_remote_images`：远程图片使用内容指纹，默认开启；用于处理平台每次生成不同临时 URL 的情况。
 - `remote_fingerprint_timeout`：远程图片内容指纹下载超时，默认 `8` 秒。

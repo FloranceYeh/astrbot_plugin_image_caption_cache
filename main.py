@@ -75,6 +75,10 @@ class ImageCaptionCachePlugin(Star):
         self._patched_targets = self._patcher.apply(
             patch_main_agent=self._config_bool("patch_main_agent", True),
             patch_quoted_message=self._config_bool("patch_quoted_message", True),
+            force_caption_for_vision_models=self._config_bool(
+                "force_caption_for_vision_models",
+                True,
+            ),
         )
         logger.info(
             "image_caption_cache plugin loaded. "
@@ -83,6 +87,8 @@ class ImageCaptionCachePlugin(Star):
             f"ttl={self._cache_ttl(None)}, "
             f"image_count_enabled={self._image_count_strategy_enabled()}, "
             f"max_cached_images={self._max_cached_images()}, "
+            "force_caption_for_vision_models="
+            f"{self._config_bool('force_caption_for_vision_models', True)}, "
             f"patched={','.join(self._patched_targets) or 'none'}"
         )
         if not self._patched_targets:
@@ -149,8 +155,9 @@ class ImageCaptionCachePlugin(Star):
         self._recent_cache_hit_logs[cache_key] = now
         self._cleanup_recent_cache_hit_logs(now)
         logger.info(
-            "图片转述缓存命中。"
-            f"provider={provider_id or '<default>'}, images={image_count}"
+            "Image caption cache hit. "
+            f"provider={provider_id or '<default>'}, "
+            f"images={image_count}"
         )
 
     def _cleanup_recent_cache_hit_logs(self, now: float) -> None:
