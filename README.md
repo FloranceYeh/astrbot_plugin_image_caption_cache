@@ -37,3 +37,7 @@
 ## 说明
 
 AstrBot 目前没有为外部插件暴露“图片转述前”的稳定 hook，因此本插件在构造时和 AstrBot 加载完成时都会尝试对核心函数做运行时补丁。补丁会检查目标函数签名；如果当前 AstrBot 版本接口不兼容，会跳过对应接入点并写入日志。可通过 `/image_caption_cache_stats` 查看当前补丁目标。
+
+## 许可证
+
+本项目基于 [GNU General Public License v3.0](LICENSE) 授权。
